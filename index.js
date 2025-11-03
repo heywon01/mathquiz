@@ -1,66 +1,23 @@
-// functions/api/users/index.js
-export async function onRequest({ request, env }) {
-    const url = new URL(request.url);
+// Worker에서 DB 바인딩 변수 'DB'를 사용합니다.
+export async function onRequestGet({ env }) {
+    try {
+        // 모든 문제 조회
+        const { results } = await env.DB.prepare(
+            `SELECT id, date, question_text, question_image_url FROM Problems ORDER BY id DESC`
+        ).all();
 
-    // GET 요청: 모든 사용자 목록 조회 (loadUsers 함수 대응)
-    if (request.method === 'GET') {
-        try {
-            const { results } = await env.DB.prepare(`SELECT id, name, isAdmin FROM Users`).all();
-            
-            // DB의 0/1을 JS의 true/false로 변환하여 반환
-            const users = results.map(user => ({
-                id: user.id,
-                name: user.name,
-                isAdmin: user.isAdmin === 1 
-            }));
-            
-            return new Response(JSON.stringify(users), {
-                headers: { 'Content-Type': 'application/json' },
-                status: 200
-            });
-        } catch (error) {
-            return new Response(JSON.stringify({ message: `사용자 목록 로드 실패: ${error.message}` }), { status: 500 });
-        }
+        // 각 문제의 선택지 및 풀이 기록도 함께 조회해야 함 (복잡성을 위해 여기서는 생략, 실제로는 JOIN 또는 여러 쿼리 사용)
+        
+        // 간단한 응답 (문제 기본 정보만)
+        return new Response(JSON.stringify(results), {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+        });
+
+    } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+            headers: { 'Content-Type': 'application/json' },
+            status: 500
+        });
     }
-
-    // POST 요청: 사용자 등록 또는 로그인 (registerUser 함수 대응)
-    if (request.method === 'POST') {
-        try {
-            const { name } = await request.json();
-            const trimmedName = name.trim();
-            if (!trimmedName) throw new Error("이름을 입력해야 합니다.");
-
-            // 1. 기존 사용자 조회
-            let userResult = await env.DB.prepare(`SELECT id, name, isAdmin FROM Users WHERE name = ?`).bind(trimmedName).first();
-
-            // 2. 사용자가 없는 경우: 신규 사용자 등록
-            if (!userResult) {
-                const newUserId = 'user' + Date.now(); // 기존 JS 로직과 유사하게 ID 생성
-                const isAdmin = (newUserId === '1234aa' ? 1 : 0); // 관리자 ID는 직접 설정 필요 (보안상 좋지 않으나 기존 로직 유지)
-                
-                await env.DB.prepare(`
-                    INSERT INTO Users (id, name, isAdmin) VALUES (?, ?, ?)
-                `).bind(newUserId, trimmedName, isAdmin).run();
-                
-                userResult = { id: newUserId, name: trimmedName, isAdmin: isAdmin };
-            }
-
-            // 3. 응답 (DB의 0/1을 JS의 true/false로 변환)
-            const userData = {
-                id: userResult.id,
-                name: userResult.name,
-                isAdmin: userResult.isAdmin === 1
-            };
-
-            return new Response(JSON.stringify(userData), {
-                headers: { 'Content-Type': 'application/json' },
-                status: 200
-            });
-
-        } catch (error) {
-            return new Response(JSON.stringify({ message: `사용자 처리 실패: ${error.message}` }), { status: 500 });
-        }
-    }
-
-    return new Response('Method Not Allowed', { status: 405 });
 }
