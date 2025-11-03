@@ -142,6 +142,76 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    const handleAnswer = async (problemId, selectedIndex) => { 
+        const problem = problems.find(p => p.id === problemId);
+        // 선택된 옵션이 유효한지 확인합니다.
+        if (!problem) {
+            await showCustomAlert("오류: 문제를 찾을 수 없습니다.");
+            return;
+        }
+        if (selectedIndex < 0 || selectedIndex >= problem.options.length) {
+            await showCustomAlert("오류: 유효하지 않은 선택지입니다.");
+            return;
+        }
+
+        const isCorrect = problem.options[selectedIndex].isCorrect;
+        const feedbackDiv = document.getElementById('modal-feedback');
+    
+        // UI 피드백
+        if (isCorrect) {
+            feedbackDiv.textContent = '정답';
+            feedbackDiv.className = 'mt-4 text-center font-bold text-green-600';
+        } else {
+            feedbackDiv.textContent = '오답';
+            feedbackDiv.className = 'mt-4 text-center font-bold text-red-600';
+        }
+    
+        // [핵심 로직]: 정답이고, 아직 풀지 않았다면 API 호출로 풀이 기록 저장
+        const alreadySolved = problem.solvers.some(s => s.userId === currentUser.id);
+
+        if (currentUser && !alreadySolved) {
+        
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            try {
+                // Worker API 호출 (POST /api/solvers/add) - 정답 여부와 상관없이 시도 기록
+                await callApi('/api/solvers/add', 'POST', {
+                    problemId: problem.id,
+                    userId: currentUser.id,
+                    userName: currentUser.name,
+                    isCorrect: isCorrect // 정답 여부를 DB에 기록
+                });
+            
+                // DB에 저장 후, 최신 정보를 다시 로드하여 화면에 반영
+                await loadProblems(); // problems 배열 갱신
+
+                if (isCorrect) {
+                    await showCustomAlert('정답입니다! 풀이 기록이 저장되었습니다.');
+                } else {
+                    await showCustomAlert('오답입니다. 풀이 기록이 저장되었습니다.');
+                }
+                
+            } catch (error) {
+                await showCustomAlert(`정답입니다! 기록 저장 오류: ${error.message}`);
+            } finally {
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }
+        } else if (alreadySolved) {
+            await showCustomAlert('이미 이 문제를 풀이했습니다.');
+        }
+
+        // 모달 UI 업데이트 및 버튼 비활성화
+        const updatedProblem = problems.find(p => p.id === problemId); 
+        if(updatedProblem) {
+            updateSolverInfo(updatedProblem);
+        }
+        renderProblems();
+    
+        document.querySelectorAll('#modal-options-container button').forEach(btn => {
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+        });
+    };
+
     // [추가] 사용자 목록 로드 함수 (GET /api/users)
     const loadUsers = async () => {
         try {
@@ -291,7 +361,9 @@ document.addEventListener('DOMContentLoaded', () => {
             card.addEventListener('click', (e) => {
                 if (e.target.closest('.delete-problem-btn')) return;
                 openProblemModal(problem.id)
+                handleAnswer(problemId, index);
             });
+            optionsContainer.appendChild(optionBtn);
             container.appendChild(card);
         });
     };
@@ -427,7 +499,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // [핵심 수정]: API 호출로 사용자 등록/조회
             const userData = await registerUser(name); 
-            currentUser = userData; // DB에서 받은 최신 사용자 정보로 업데이트
+            currentUser = user; // DB에서 받은 최신 사용자 정보로 업데이트
 
             document.getElementById('user-name-display').textContent = currentUser.name;
         
@@ -438,16 +510,15 @@ document.addEventListener('DOMContentLoaded', () => {
             updateAdminUI(); 
             showScreen('main');
             showMainView('problems');
-    
             const today = new Date();
             renderProblems();
             renderCalendar(today.getFullYear(), today.getMonth());
-            nameInputForm.reset();
 
         } catch (error) {
             await showCustomAlert(error.message || '사용자 정보를 처리하는 데 실패했습니다.');
         } finally {
             document.getElementById('loading-overlay').classList.add('hidden');
+            nameInputForm.reset();
         }
     });
         // 간단한 사용자 ID 생성 (현재 시간 기반)
@@ -509,27 +580,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const id = document.getElementById('admin-id').value;
         const password = document.getElementById('admin-password').value;
         const errorDisplay = document.getElementById('admin-auth-error');
+        errorDisplay.classList.add('hidden');
 
-        if (id === ADMIN_ID && password === 'wj211@') {
+        if (id !== ADMIN_ID || password !== 'wj211@') {
+            errorDisplay.textContent = 'ID 또는 비밀번호가 일치하지 않습니다.';
+            errorDisplay.classList.remove('hidden');
+            return;
+        }
 
-            const user = users.find(u => u.id === id);
+        // ID와 비밀번호가 일치하면, DB에서 해당 사용자를 찾습니다.
+        await loadUsers(); // 최신 사용자 목록을 로드합니다.
+        const user = users.find(u => u.id === id);
 
-            if (user) {
-                // 임시로 관리자 인증 성공으로 간주하고 UI 업데이트
-                currentUser = user; 
-                currentUser.isAdmin = true; // 임시로 플래그를 설정 (실제로는 DB에서 받아와야 함)
-                localStorage.setItem('currentUser', JSON.stringify(currentUser));
-                updateAdminUI(); 
-                adminAuthModal.classList.add('hidden');
-                errorDisplay.classList.add('hidden');
-            } else {
-                // DB 연동 후에는 /api/admin/auth Worker를 호출하여 DB에서 ID/PW를 확인해야 합니다.
-                errorDisplay.textContent = "DB 연동 후 관리자 인증 API가 필요합니다.";
-                errorDisplay.classList.remove('hidden');
-            }
+        if (user) {
+            // [핵심]: 관리자 인증 성공
+            currentUser = user; 
+            currentUser.isAdmin = true; // DB에서 isAdmin 필드를 받았다고 가정 (API에서 처리되어야 함)
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            updateAdminUI(); 
+            adminAuthModal.classList.add('hidden');
+            await showCustomAlert(`관리자 (${currentUser.name})로 로그인되었습니다.`);
 
         } else {
-            errorDisplay.textContent = 'ID 또는 비밀번호가 일치하지 않습니다.';
+            errorDisplay.textContent = "관리자 계정을 찾을 수 없습니다.";
             errorDisplay.classList.remove('hidden');
         }
     });
@@ -572,20 +645,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // 관리자 ID로 로그인한 경우를 제외하고 이름 변경
         //const userInDb = users.find(u => u.id === currentUser.id && !u.isAdmin);
         if(userInDb) {
-            //userInDb.name = newName;
-            //currentUser.name = newName;
-            currentUser = userInDb;
-            document.getElementById('edit-name').value = currentUser.name; // 원복
+            userInDb.name = newName;
+            currentUser.name = newName;
+            //document.getElementById('edit-name').value = currentUser.name; // 원복
             document.getElementById('user-name-display').textContent = currentUser.name;
             //saveData(); // 계정 정보 변경 후 데이터 저장
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            //await showCustomAlert('이름이 변경되었습니다.');
+            await showCustomAlert('이름이 변경되었습니다.');
             
-        //} else if (currentUser.isAdmin && currentUser.id === ADMIN_ID) {
-            //await showCustomAlert('관리자 계정의 이름은 변경할 수 없습니다.');
-            //document.getElementById('edit-name').value = currentUser.name; // 원복
-        //} else {
-             //await showCustomAlert('사용자 정보를 찾을 수 없습니다.');
         }
         showMainView('problems');
     });
@@ -608,17 +675,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('loading-overlay').classList.remove('hidden');
                 try {
                     // Worker API 호출 (POST /api/problems/delete)
-                    const response = await callApi('/api/problems/delete', 'POST', { problemId });
-                    
-                    if (response && response.message === 'Problem deleted') {
-                         await loadProblems(); 
-                         renderProblems();
-                         await showCustomAlert('문제가 삭제되었습니다.');
-                    } else {
-                         throw new Error('문제가 성공적으로 삭제되지 않았습니다.');
-                    }
+                    await callApi(`/api/problems/delete`, 'POST', { problemId: problemId }); 
+                
+                    await loadProblems(); // 문제 목록 새로고침
+                    renderProblems();
+                    await showCustomAlert('문제가 삭제되었습니다.');
+
                 } catch (error) {
-                    await showCustomAlert(`삭제 오류: ${error.message}`);
+                    await showCustomAlert(`문제 삭제 오류: ${error.message}`);
                 } finally {
                     document.getElementById('loading-overlay').classList.add('hidden');
                 }
